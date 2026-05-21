@@ -1,0 +1,735 @@
+import { useState, useEffect } from "react";
+
+// ═══════════════════════════════════════════════════
+//  定数・ユーティリティ
+// ═══════════════════════════════════════════════════
+const INITIAL_STAFF = [
+  { id: 1, name: "田中 太郎", avatar: "田" },
+  { id: 2, name: "佐藤 花子", avatar: "佐" },
+  { id: 3, name: "鈴木 一郎", avatar: "鈴" },
+  { id: 4, name: "山田 美咲", avatar: "山" },
+  { id: 5, name: "伊藤 健太", avatar: "伊" },
+];
+
+const TIME_SLOTS = [
+  "08:00","08:30","09:00","09:30","10:00","10:30","11:00","11:30",
+  "12:00","12:30","13:00","13:30","14:00","14:30","15:00","15:30",
+  "16:00","16:30","17:00","17:30","18:00","18:30","19:00","19:30",
+  "20:00","20:30","21:00","21:30","22:00",
+];
+const DAYS_JP = ["月","火","水","木","金","土","日"];
+
+const STORE_LAT = 34.9980;
+const STORE_LNG = 135.7780;
+const STORE_RADIUS_M = 150;
+const ADMIN_PASSWORD = "udon2024"; // ★ここを変更してください
+
+const C = {
+  bg:"#fdf6ee", paper:"#fffaf3", ink:"#2d1a0e", muted:"#8b6f5a",
+  accent:"#c0392b", gold:"#d4a843", green:"#2d7a4f", border:"#e8d5bc",
+  shadow:"0 2px 12px rgba(45,26,14,0.09)",
+};
+
+function getWeekDates(offset=0){
+  const today=new Date(), mon=new Date(today);
+  mon.setDate(today.getDate()-((today.getDay()+6)%7)+offset*7);
+  return Array.from({length:7},(_,i)=>{ const d=new Date(mon); d.setDate(mon.getDate()+i); return d; });
+}
+function weekKey(dates){ return dates[0].toLocaleDateString("ja-JP"); }
+function dateKey(date){ return date.toLocaleDateString("ja-JP"); }
+function fmtDate(d){ return `${d.getMonth()+1}/${d.getDate()}`; }
+function fmtHM(d){ return d.toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"}); }
+function fmtHMS(d){ return d.toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit",second:"2-digit"}); }
+function toMin(hhmm){ const[h,m]=hhmm.split(":").map(Number); return h*60+m; }
+
+// 給与計算ルール：早出カット・残業は15分上限
+function calcBillableMinutes(shiftStart, shiftEnd, actualIn, actualOut){
+  if(!actualIn||!actualOut) return 0;
+  const sIn=toMin(shiftStart), sOut=toMin(shiftEnd);
+  const aIn=actualIn.getHours()*60+actualIn.getMinutes();
+  const aOut=actualOut.getHours()*60+actualOut.getMinutes();
+  const effectiveIn=Math.max(aIn,sIn);          // 早出はカット
+  const effectiveOut=Math.min(aOut, sOut+15);    // 残業上限+15分
+  return Math.max(0, effectiveOut-effectiveIn);
+}
+
+function calcDistanceM(lat1,lng1,lat2,lng2){
+  const R=6371000,dLat=(lat2-lat1)*Math.PI/180,dLng=(lng2-lng1)*Math.PI/180;
+  const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
+// ═══════════════════════════════════════════════════
+//  App
+// ═══════════════════════════════════════════════════
+export default function App(){
+  const [tab,setTab]=useState("shift");
+  const [now,setNow]=useState(new Date());
+  const [staff]=useState(INITIAL_STAFF);
+  const [shifts,setShifts]=useState({});        // {"wk_dayIdx":{staffId:{start,end}}}
+  const [attendance,setAttendance]=useState({}); // {staffId:{"dateKey":{in,out}}}
+  const [wages,setWages]=useState({1:1200,2:1100,3:1300,4:1050,5:1150});
+  const [toast,setToast]=useState(null);
+  const [adminAuthed,setAdminAuthed]=useState(false);
+  const [showAdminLogin,setShowAdminLogin]=useState(false);
+
+  useEffect(()=>{ const t=setInterval(()=>setNow(new Date()),1000); return ()=>clearInterval(t); },[]);
+
+  function showToast(msg,type="ok"){ setToast({msg,type}); setTimeout(()=>setToast(null),2200); }
+
+  function setShift(wk,dayIdx,staffId,val){
+    const k=`${wk}_${dayIdx}`;
+    setShifts(p=>({...p,[k]:{...(p[k]||{}),[staffId]:val}}));
+  }
+  function getShift(wk,dayIdx,staffId){ return shifts[`${wk}_${dayIdx}`]?.[staffId]||null; }
+  function getShiftByDate(date,staffId){
+    const dow=(date.getDay()+6)%7, mon=new Date(date);
+    mon.setDate(date.getDate()-dow);
+    return shifts[`${weekKey([mon])}_${dow}`]?.[staffId]||null;
+  }
+
+  function punchIn(staffId){
+    const dk=dateKey(new Date());
+    setAttendance(p=>({...p,[staffId]:{...(p[staffId]||{}),[dk]:{...(p[staffId]?.[dk]||{}),in:new Date()}}}));
+    showToast("🍜 出勤打刻しました！");
+  }
+  function punchOut(staffId){
+    const dk=dateKey(new Date());
+    setAttendance(p=>({...p,[staffId]:{...(p[staffId]||{}),[dk]:{...(p[staffId]?.[dk]||{}),out:new Date()}}}));
+    showToast("👋 退勤打刻しました！");
+  }
+  function getAtt(staffId,date){ return attendance[staffId]?.[dateKey(date)]||{}; }
+
+  const TABS=[{id:"shift",icon:"📅",label:"シフト入力"},{id:"punch",icon:"⏱",label:"打刻"},{id:"compare",icon:"🔍",label:"照合"},{id:"admin",icon:"⚙️",label:"管理者"}];
+
+  function handleTabClick(id){
+    if(id==="admin"&&!adminAuthed){ setShowAdminLogin(true); return; }
+    setTab(id);
+  }
+  function handleAdminLogout(){ setAdminAuthed(false); setTab("shift"); }
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'Noto Serif JP','Hiragino Mincho ProN',serif",color:C.ink}}>
+      <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;600;700&display=swap" rel="stylesheet"/>
+      <header style={{background:C.ink,color:"#fffaf3",padding:"16px 20px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 12px rgba(0,0,0,0.25)"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10}}>
+          <span style={{fontSize:26}}>🍜</span>
+          <div>
+            <div style={{fontSize:16,fontWeight:700,letterSpacing:"0.08em"}}>勤怠管理システム</div>
+            <div style={{fontSize:10,color:C.gold,letterSpacing:"0.12em"}}>UDON RESTAURANT</div>
+          </div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontSize:20,fontWeight:700,fontVariantNumeric:"tabular-nums",color:C.gold}}>{fmtHMS(now)}</div>
+          <div style={{fontSize:10,color:"#c8b49a"}}>{now.toLocaleDateString("ja-JP",{year:"numeric",month:"long",day:"numeric",weekday:"short"})}</div>
+        </div>
+      </header>
+      <nav style={{display:"flex",background:"#f5e9d6",borderBottom:`2px solid ${C.border}`}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>handleTabClick(t.id)} style={{
+            flex:1,padding:"11px 4px 9px",border:"none",cursor:"pointer",
+            background:tab===t.id?C.paper:"transparent",
+            borderBottom:tab===t.id?`3px solid ${C.accent}`:"3px solid transparent",
+            color:tab===t.id?C.accent:C.muted,
+            fontFamily:"inherit",fontSize:11,fontWeight:tab===t.id?700:400,transition:"all 0.15s"
+          }}>
+            <div style={{fontSize:16}}>{t.icon}</div>{t.label}{t.id==="admin"&&<span style={{fontSize:9,marginLeft:2}}>{adminAuthed?"🔓":"🔒"}</span>}
+          </button>
+        ))}
+      </nav>
+      <main style={{maxWidth:820,margin:"0 auto",padding:"18px 14px 60px"}}>
+        {tab==="shift"   && <ShiftInputView staff={staff} getShift={getShift} setShift={setShift} showToast={showToast}/>}
+        {tab==="punch"   && <PunchView staff={staff} now={now} getAtt={getAtt} punchIn={punchIn} punchOut={punchOut} getShiftByDate={getShiftByDate}/>}
+        {tab==="compare" && <CompareView staff={staff} attendance={attendance} getShiftByDate={getShiftByDate} wages={wages}/>}
+        {tab==="admin"   && <AdminView staff={staff} shifts={shifts} getShift={getShift} setShift={setShift} attendance={attendance} wages={wages} setWages={setWages} getShiftByDate={getShiftByDate} showToast={showToast} onLogout={handleAdminLogout}/>}
+      </main>
+      {toast&&(
+        <div style={{position:"fixed",bottom:24,left:"50%",transform:"translateX(-50%)",background:toast.type==="ok"?C.ink:C.accent,color:"#fffaf3",padding:"11px 26px",borderRadius:32,fontSize:13,fontWeight:700,boxShadow:"0 4px 20px rgba(0,0,0,0.28)",zIndex:999,animation:"fadeUp 0.25s ease"}}>
+          {toast.msg}
+        </div>
+      )}
+      {showAdminLogin&&<AdminLoginModal onSuccess={()=>{setAdminAuthed(true);setShowAdminLogin(false);setTab("admin");}} onClose={()=>setShowAdminLogin(false)}/>}
+      <style>{`@keyframes fadeUp{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}`}</style>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+//  1. シフト入力
+// ═══════════════════════════════════════════════════
+function ShiftInputView({staff,getShift,setShift,showToast}){
+  const [weekOffset,setWeekOffset]=useState(0);
+  const [modal,setModal]=useState(null);
+  const [editVal,setEditVal]=useState({start:"10:00",end:"18:00"});
+  const dates=getWeekDates(weekOffset), wk=weekKey(dates);
+
+  function openModal(staffId,dayIdx){
+    setEditVal(getShift(wk,dayIdx,staffId)||{start:"10:00",end:"18:00"});
+    setModal({staffId,dayIdx});
+  }
+  function save(){ setShift(wk,modal.dayIdx,modal.staffId,editVal); setModal(null); showToast("📅 シフトを保存しました"); }
+  function remove(){ setShift(wk,modal.dayIdx,modal.staffId,null); setModal(null); showToast("🗑 シフトを削除しました"); }
+
+  return (
+    <div>
+      <SectionTitle icon="📅" title="シフト入力" sub="週ごとにスタッフのシフトを入力してください"/>
+      <WeekNav dates={dates} offset={weekOffset} setOffset={setWeekOffset}/>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",background:C.paper,borderRadius:14,overflow:"hidden",boxShadow:C.shadow,fontSize:12,minWidth:560}}>
+          <thead>
+            <tr style={{background:C.ink,color:"#fffaf3"}}>
+              <th style={{padding:"10px 12px",textAlign:"left",width:88}}>スタッフ</th>
+              {dates.map((d,i)=>(
+                <th key={i} style={{padding:"10px 6px",textAlign:"center",color:i>=5?C.gold:"#fffaf3",minWidth:70}}>
+                  <div>{DAYS_JP[i]}</div><div style={{fontSize:10,opacity:0.7}}>{fmtDate(d)}</div>
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {staff.map((s,si)=>(
+              <tr key={s.id} style={{borderBottom:`1px solid ${C.border}`,background:si%2===0?C.paper:C.bg}}>
+                <td style={{padding:"10px 10px",fontWeight:700}}>
+                  <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:26,height:26,borderRadius:"50%",background:"#e8d5bc",color:C.muted,fontSize:11,fontWeight:700,marginRight:5}}>{s.avatar}</span>
+                  {s.name.split(" ")[0]}
+                </td>
+                {dates.map((_,dayIdx)=>{
+                  const sh=getShift(wk,dayIdx,s.id);
+                  return (
+                    <td key={dayIdx} style={{padding:"5px 4px",textAlign:"center"}}>
+                      {sh?(
+                        <button onClick={()=>openModal(s.id,dayIdx)} style={{width:"100%",padding:"5px 2px",borderRadius:8,border:"1px solid #a7f3d0",background:"#d1fae5",color:"#065f46",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit",lineHeight:1.5}}>
+                          {sh.start}<br/>〜{sh.end}
+                        </button>
+                      ):(
+                        <button onClick={()=>openModal(s.id,dayIdx)} style={{width:"100%",padding:"13px 0",border:`1.5px dashed ${C.border}`,borderRadius:8,background:"transparent",color:C.muted,fontSize:18,cursor:"pointer"}}>+</button>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {modal&&(
+        <Modal onClose={()=>setModal(null)}>
+          <div style={{fontSize:15,fontWeight:700,marginBottom:3}}>{staff.find(s=>s.id===modal.staffId)?.name}</div>
+          <div style={{fontSize:12,color:C.muted,marginBottom:18}}>{DAYS_JP[modal.dayIdx]}曜日（{fmtDate(dates[modal.dayIdx])}）</div>
+          <div style={{display:"flex",gap:12,marginBottom:20}}>
+            <label style={LS}>出勤時刻<select value={editVal.start} onChange={e=>setEditVal(v=>({...v,start:e.target.value}))} style={SS}>{TIME_SLOTS.map(t=><option key={t}>{t}</option>)}</select></label>
+            <label style={LS}>退勤時刻<select value={editVal.end} onChange={e=>setEditVal(v=>({...v,end:e.target.value}))} style={SS}>{TIME_SLOTS.map(t=><option key={t}>{t}</option>)}</select></label>
+          </div>
+          <button onClick={save} style={PB(C.ink)}>💾 保存する</button>
+          {getShift(wk,modal.dayIdx,modal.staffId)&&<button onClick={remove} style={{...PB("#fee2e2"),color:C.accent,marginTop:8}}>🗑 削除する</button>}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+//  2. 打刻
+// ═══════════════════════════════════════════════════
+function PunchView({staff,now,getAtt,punchIn,punchOut,getShiftByDate}){
+  const [selected,setSelected]=useState(null);
+  const [gps,setGps]=useState("idle");
+  const [gpsMsg,setGpsMsg]=useState("");
+  const today=new Date();
+  const att=selected?getAtt(selected.id,today):{};
+  const shift=selected?getShiftByDate(today,selected.id):null;
+  const status=!att.in?"absent":!att.out?"working":"done";
+
+  function selectStaff(s){ setSelected(s); setGps("idle"); setGpsMsg(""); }
+
+  function handlePunch(type){
+    setGps("checking"); setGpsMsg("位置情報を確認中...");
+    if(!navigator.geolocation){ setGps("error"); setGpsMsg("GPSに対応していません"); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos=>{
+        const dist=calcDistanceM(pos.coords.latitude,pos.coords.longitude,STORE_LAT,STORE_LNG);
+        if(dist<=STORE_RADIUS_M){ setGps("ok"); setGpsMsg(`店舗から約${Math.round(dist)}m — 打刻OK`); type==="in"?punchIn(selected.id):punchOut(selected.id); }
+        else{ setGps("error"); setGpsMsg(`店舗から約${Math.round(dist)}m離れています（許容: ${STORE_RADIUS_M}m以内）`); }
+      },
+      ()=>{ setGps("denied"); setGpsMsg("位置情報が拒否されました。設定をご確認ください。"); },
+      {enableHighAccuracy:true,timeout:10000}
+    );
+  }
+
+  return (
+    <div>
+      <SectionTitle icon="⏱" title="出退勤 打刻" sub="スタッフを選んで打刻してください"/>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(118px,1fr))",gap:10,marginBottom:22}}>
+        {staff.map(s=>{
+          const a=getAtt(s.id,today), st=!a.in?"absent":!a.out?"working":"done", isSel=selected?.id===s.id;
+          return (
+            <button key={s.id} onClick={()=>selectStaff(s)} style={{background:isSel?C.ink:C.paper,border:`2px solid ${isSel?C.ink:C.border}`,borderRadius:14,padding:"12px 8px",cursor:"pointer",textAlign:"center",boxShadow:C.shadow,transition:"all 0.15s",transform:isSel?"scale(1.04)":"scale(1)"}}>
+              <div style={{width:40,height:40,borderRadius:"50%",background:isSel?C.gold:"#e8d5bc",color:isSel?C.ink:C.muted,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,margin:"0 auto 7px"}}>{s.avatar}</div>
+              <div style={{fontSize:12,fontWeight:700,color:isSel?"#fffaf3":C.ink,marginBottom:5}}>{s.name.split(" ")[0]}</div>
+              <span style={{fontSize:10,padding:"2px 7px",borderRadius:10,background:SB[st],color:SC[st],fontWeight:700}}>{SL[st]}</span>
+            </button>
+          );
+        })}
+      </div>
+      {selected?(
+        <div style={{background:C.paper,border:`1px solid ${C.border}`,borderRadius:16,padding:20,boxShadow:C.shadow}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
+            <div style={{width:46,height:46,borderRadius:"50%",background:C.ink,color:C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:700}}>{selected.avatar}</div>
+            <div>
+              <div style={{fontSize:17,fontWeight:700}}>{selected.name}</div>
+              {shift&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>シフト: {shift.start} 〜 {shift.end}</div>}
+            </div>
+            <span style={{marginLeft:"auto",fontSize:11,padding:"4px 12px",borderRadius:20,background:SB[status],color:SC[status],fontWeight:700}}>{SL[status]}</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:16}}>
+            {[["出勤","🟢",att.in],["退勤","🔵",att.out]].map(([label,icon,time])=>(
+              <div key={label} style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 12px",textAlign:"center"}}>
+                <div style={{fontSize:11,color:C.muted,marginBottom:3}}>{icon} {label}時刻</div>
+                <div style={{fontSize:19,fontWeight:700,fontVariantNumeric:"tabular-nums"}}>{time?fmtHM(time):"──"}</div>
+              </div>
+            ))}
+          </div>
+          {gps!=="idle"&&(
+            <div style={{marginBottom:14,padding:"9px 14px",borderRadius:10,fontSize:12,fontWeight:600,background:gps==="ok"?"#d1fae5":gps==="checking"?"#fef9ec":"#fee2e2",color:gps==="ok"?"#065f46":gps==="checking"?"#92400e":"#991b1b",display:"flex",alignItems:"center",gap:8}}>
+              <span>{gps==="checking"?"📡":gps==="ok"?"📍":"🚫"}</span>{gpsMsg}
+            </div>
+          )}
+          <div style={{display:"flex",gap:10}}>
+            <button disabled={!!att.in||gps==="checking"} onClick={()=>handlePunch("in")} style={PunchSt(!att.in&&gps!=="checking",C.green)}>🟢 出勤打刻</button>
+            <button disabled={!att.in||!!att.out||gps==="checking"} onClick={()=>handlePunch("out")} style={PunchSt(!!att.in&&!att.out&&gps!=="checking","#6366f1")}>🔵 退勤打刻</button>
+          </div>
+          <div style={{marginTop:8,textAlign:"center",fontSize:11,color:C.muted}}>🔒 東山区日吉町から{STORE_RADIUS_M}m以内の位置情報が必要です</div>
+        </div>
+      ):(
+        <div style={{textAlign:"center",padding:"28px 0",color:C.muted,fontSize:13}}>👆 スタッフカードを選んで打刻してください</div>
+      )}
+      <div style={{marginTop:24}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.muted,marginBottom:10}}>📋 本日の出勤状況</div>
+        <div style={{background:C.paper,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+          {staff.map((s,i)=>{
+            const a=getAtt(s.id,today), st=!a.in?"absent":!a.out?"working":"done";
+            return (
+              <div key={s.id} style={{display:"flex",alignItems:"center",padding:"10px 14px",gap:10,borderBottom:i<staff.length-1?`1px solid ${C.border}`:"none",background:st==="working"?"#f0fdf4":"transparent"}}>
+                <div style={{width:30,height:30,borderRadius:"50%",background:"#e8d5bc",color:C.muted,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>{s.avatar}</div>
+                <div style={{flex:1,fontSize:13,fontWeight:600}}>{s.name}</div>
+                <div style={{fontSize:11,color:C.muted,textAlign:"right",minWidth:100}}>
+                  {a.in&&<div>出勤 {fmtHM(a.in)}</div>}
+                  {a.out&&<div>退勤 {fmtHM(a.out)}</div>}
+                  {!a.in&&<div style={{color:"#cbd5e1"}}>未出勤</div>}
+                </div>
+                <span style={{fontSize:10,padding:"2px 8px",borderRadius:8,background:SB[st],color:SC[st],fontWeight:700,minWidth:44,textAlign:"center"}}>{SL[st]}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+const SL={absent:"未出勤",working:"勤務中",done:"退勤済"};
+const SC={absent:C.muted,working:C.green,done:"#6366f1"};
+const SB={absent:"#f1f5f9",working:"#d1fae5",done:"#e0e7ff"};
+
+// ═══════════════════════════════════════════════════
+//  3. 照合
+// ═══════════════════════════════════════════════════
+function CompareView({staff,attendance,getShiftByDate,wages}){
+  const [selStaff,setSelStaff]=useState(staff[0]);
+  const [moOffset,setMoOffset]=useState(0);
+  const today=new Date();
+  const base=new Date(today.getFullYear(),today.getMonth()+moOffset,1);
+  const year=base.getFullYear(), month=base.getMonth();
+  const monthDates=Array.from({length:new Date(year,month+1,0).getDate()},(_,i)=>new Date(year,month,i+1));
+
+  function getAttD(date){ return attendance[selStaff.id]?.[dateKey(date)]||{}; }
+  const dow=d=>DAYS_JP[(d.getDay()+6)%7];
+  const isWE=d=>d.getDay()===0||d.getDay()===6;
+  const isToday=d=>d.toDateString()===today.toDateString();
+
+  const monthTotal=monthDates.reduce((acc,d)=>{
+    const sh=getShiftByDate(d,selStaff.id), att=getAttD(d);
+    const mins=sh&&att.in&&att.out?calcBillableMinutes(sh.start,sh.end,att.in,att.out):0;
+    return {mins:acc.mins+mins, pay:acc.pay+Math.floor(mins/60*(wages[selStaff.id]||0))};
+  },{mins:0,pay:0});
+
+  function verdict(sh,att){
+    if(!sh&&!att.in) return {label:"休日",    bg:"#f1f5f9",color:"#94a3b8"};
+    if(!sh&& att.in) return {label:"シフト外", bg:"#e0f2fe",color:"#075985"};
+    if( sh&&!att.in) return {label:"欠勤",     bg:"#fee2e2",color:"#991b1b"};
+    if(!att.out)     return {label:"勤務中",   bg:"#d1fae5",color:"#065f46"};
+    const aIn=att.in.getHours()*60+att.in.getMinutes();
+    const aOut=att.out.getHours()*60+att.out.getMinutes();
+    const late=aIn>toMin(sh.start)+5, early=aOut<toMin(sh.end)-5;
+    if(late&&early)  return {label:"遅刻・早退",bg:"#fee2e2",color:"#991b1b"};
+    if(late)         return {label:"遅刻",      bg:"#fef3c7",color:"#92400e"};
+    if(early)        return {label:"早退",      bg:"#ede9fe",color:"#5b21b6"};
+    return               {label:"正常",          bg:"#d1fae5",color:"#065f46"};
+  }
+
+  function diffTag(planned,actual,type){
+    if(!actual) return null;
+    const diff=actual.getHours()*60+actual.getMinutes()-toMin(planned);
+    if(type==="in"&&diff>5){
+      const a=Math.abs(diff); return <span style={{fontSize:10,color:"#ef4444",marginLeft:3}}>+{Math.floor(a/60)?Math.floor(a/60)+"h":""}{a%60?""+a%60+"m":""}遅刻</span>;
+    }
+    if(type==="out"&&diff<-5){
+      const a=Math.abs(diff); return <span style={{fontSize:10,color:"#ef4444",marginLeft:3}}>{Math.floor(a/60)?Math.floor(a/60)+"h":""}{a%60?a%60+"m":""}早退</span>;
+    }
+    if(type==="out"&&diff>0){
+      const a=Math.min(diff,15); return <span style={{fontSize:10,color:"#22c55e",marginLeft:3}}>+{a}m</span>;
+    }
+    return null;
+  }
+
+  return (
+    <div>
+      <SectionTitle icon="🔍" title="シフト照合" sub="シフト予定と実際の出退勤を比較します"/>
+      <WeekNavMonth year={year} month={month} offset={moOffset} setOffset={setMoOffset}/>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+        {staff.map(s=>(
+          <button key={s.id} onClick={()=>setSelStaff(s)} style={{padding:"7px 14px",borderRadius:20,border:`1.5px solid ${selStaff.id===s.id?C.ink:C.border}`,background:selStaff.id===s.id?C.ink:C.paper,color:selStaff.id===s.id?"#fffaf3":C.ink,fontFamily:"inherit",fontSize:12,cursor:"pointer",fontWeight:600,transition:"all 0.15s"}}>{s.avatar} {s.name}</button>
+        ))}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:16}}>
+        {[["出勤日数",`${monthDates.filter(d=>{const a=getAttD(d);return a.in&&a.out;}).length}日`,C.green],["総勤務時間",`${Math.floor(monthTotal.mins/60)}h${monthTotal.mins%60}m`,C.ink],["合計給与",`¥${monthTotal.pay.toLocaleString()}`,C.accent]].map(([label,val,color])=>(
+          <div key={label} style={{background:C.paper,border:`1px solid ${C.border}`,borderRadius:12,padding:"11px 8px",textAlign:"center"}}>
+            <div style={{fontSize:10,color:C.muted,marginBottom:3}}>{label}</div>
+            <div style={{fontSize:16,fontWeight:700,color}}>{val}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",background:C.paper,borderRadius:14,overflow:"hidden",boxShadow:C.shadow,fontSize:12,minWidth:520}}>
+          <thead>
+            <tr style={{background:C.ink,color:"#fffaf3"}}>
+              {["日付","曜","予定出勤","予定退勤","実際出勤","実際退勤","実働","判定"].map(h=>(
+                <th key={h} style={{padding:"9px 6px",textAlign:"center",fontSize:11,whiteSpace:"nowrap"}}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {monthDates.map((date,i)=>{
+              const sh=getShiftByDate(date,selStaff.id), att=getAttD(date), vd=verdict(sh,att);
+              const mins=sh&&att.in&&att.out?calcBillableMinutes(sh.start,sh.end,att.in,att.out):0;
+              const we=isWE(date), td=isToday(date);
+              return (
+                <tr key={i} style={{borderBottom:`1px solid ${C.border}`,background:td?"#fef9ec":we?"#fdf4f4":i%2===0?C.paper:C.bg}}>
+                  <td style={{padding:"7px 6px",textAlign:"center",fontWeight:td?700:400,color:td?C.gold:C.ink,whiteSpace:"nowrap"}}>{month+1}/{date.getDate()}{td&&" ✦"}</td>
+                  <td style={{padding:"7px 4px",textAlign:"center",color:we?C.accent:C.muted,fontWeight:600}}>{dow(date)}</td>
+                  <td style={{padding:"7px 6px",textAlign:"center",color:sh?C.green:"#cbd5e1",fontWeight:600}}>{sh?sh.start:"──"}</td>
+                  <td style={{padding:"7px 6px",textAlign:"center",color:sh?C.green:"#cbd5e1",fontWeight:600}}>{sh?sh.end:"──"}</td>
+                  <td style={{padding:"7px 6px",textAlign:"center"}}>{att.in?<span>{fmtHM(att.in)}{diffTag(sh?.start,att.in,"in")}</span>:<span style={{color:"#cbd5e1"}}>──</span>}</td>
+                  <td style={{padding:"7px 6px",textAlign:"center"}}>{att.out?<span>{fmtHM(att.out)}{sh&&diffTag(sh.end,att.out,"out")}</span>:<span style={{color:"#cbd5e1"}}>──</span>}</td>
+                  <td style={{padding:"7px 6px",textAlign:"center",fontWeight:700,color:mins>0?C.ink:"#cbd5e1"}}>{mins>0?`${Math.floor(mins/60)}h${mins%60}m`:"──"}</td>
+                  <td style={{padding:"7px 6px",textAlign:"center"}}><span style={{fontSize:10,padding:"2px 6px",borderRadius:8,background:vd.bg,color:vd.color,fontWeight:700,whiteSpace:"nowrap"}}>{vd.label}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr style={{background:C.ink,color:"#fffaf3"}}>
+              <td colSpan={6} style={{padding:"10px 12px",fontWeight:700,fontSize:12}}>月合計</td>
+              <td style={{padding:"10px 6px",textAlign:"center",color:C.gold,fontWeight:700}}>{Math.floor(monthTotal.mins/60)}h{monthTotal.mins%60}m</td>
+              <td style={{padding:"10px 6px",textAlign:"center",color:C.gold,fontWeight:700}}>¥{monthTotal.pay.toLocaleString()}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div style={{marginTop:8,fontSize:11,color:C.muted}}>※ 早出は反映なし（シフト開始から計算）。残業は+15分を上限に反映。</div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+//  4. 管理者
+// ═══════════════════════════════════════════════════
+function AdminView({staff,shifts,getShift,setShift,attendance,wages,setWages,getShiftByDate,showToast,onLogout}){
+  const [sub,setSub]=useState("wage");
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+        <div>
+          <div style={{fontSize:17,fontWeight:700,letterSpacing:"0.06em"}}>⚙️ 管理者</div>
+          <div style={{fontSize:11,color:C.muted,marginTop:2}}>時給・週次サマリ・GPS設定</div>
+        </div>
+        <button onClick={onLogout} style={{padding:"7px 16px",borderRadius:20,border:`1.5px solid ${C.border}`,background:C.paper,color:C.muted,fontFamily:"inherit",fontSize:12,fontWeight:700,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
+          🔒 ログアウト
+        </button>
+      </div>
+      <div style={{height:2,background:`linear-gradient(to right,${C.gold},transparent)`,marginBottom:18,borderRadius:2}}/>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:20}}>
+        {[["wage","💴 時給設定"],["weekly","📋 週次サマリ"],["gps","📍 GPS設定"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setSub(k)} style={{padding:"8px 16px",borderRadius:20,border:`1.5px solid ${sub===k?C.accent:C.border}`,background:sub===k?C.accent:C.paper,color:sub===k?"#fff":C.ink,fontFamily:"inherit",fontSize:12,cursor:"pointer",fontWeight:700}}>{l}</button>
+        ))}
+      </div>
+      {sub==="wage"   && <WageView staff={staff} wages={wages} setWages={setWages} showToast={showToast} attendance={attendance} getShiftByDate={getShiftByDate}/>}
+      {sub==="weekly" && <WeeklySummary staff={staff} getShift={getShift} attendance={attendance} wages={wages}/>}
+      {sub==="gps"    && <GpsView/>}
+    </div>
+  );
+}
+
+function WageView({staff,wages,setWages,showToast,attendance,getShiftByDate}){
+  const [editing,setEditing]=useState({});
+  const today=new Date(), base=new Date(today.getFullYear(),today.getMonth(),1);
+  const monthDates=Array.from({length:new Date(base.getFullYear(),base.getMonth()+1,0).getDate()},(_,i)=>new Date(base.getFullYear(),base.getMonth(),i+1));
+
+  function save(staffId){
+    const raw = editing[staffId] !== undefined ? editing[staffId] : wages[staffId];
+    const v = parseInt(raw);
+    if(!v||v<900||v>5000){ showToast("❌ 有効な時給を入力してください（900〜5000円）","error"); return; }
+    setWages(p=>({...p,[staffId]:v}));
+    setEditing(p=>({...p,[staffId]:undefined}));
+    showToast("💴 時給を更新しました");
+  }
+  function monthSummary(staffId){
+    return monthDates.reduce((acc,d)=>{
+      const sh=getShiftByDate(d,staffId), att=attendance[staffId]?.[dateKey(d)]||{};
+      const mins=sh&&att.in&&att.out?calcBillableMinutes(sh.start,sh.end,att.in,att.out):0;
+      return {mins:acc.mins+mins, pay:acc.pay+Math.floor(mins/60*(wages[staffId]||0))};
+    },{mins:0,pay:0});
+  }
+
+  return (
+    <div>
+      <div style={{background:C.paper,border:`1px solid ${C.border}`,borderRadius:14,overflow:"hidden"}}>
+        <div style={{background:"#f5e9d6",padding:"9px 14px",fontSize:11,fontWeight:700,color:C.muted,borderBottom:`1px solid ${C.border}`,display:"grid",gridTemplateColumns:"1fr 90px 130px 100px 120px",gap:8,alignItems:"center"}}>
+          <span>スタッフ</span><span style={{textAlign:"right"}}>時給</span><span style={{textAlign:"center"}}>今月実働</span><span style={{textAlign:"right"}}>今月給与</span><span style={{textAlign:"center"}}>変更</span>
+        </div>
+        {staff.map((s,i)=>{
+          const sum=monthSummary(s.id);
+          return (
+            <div key={s.id} style={{display:"grid",gridTemplateColumns:"1fr 90px 130px 100px 120px",gap:8,alignItems:"center",padding:"12px 14px",borderBottom:i<staff.length-1?`1px solid ${C.border}`:"none",background:i%2===0?C.paper:C.bg}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{width:28,height:28,borderRadius:"50%",background:"#e8d5bc",color:C.muted,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>{s.avatar}</div>
+                <span style={{fontSize:13,fontWeight:600}}>{s.name}</span>
+              </div>
+              <div style={{textAlign:"right",fontSize:13,fontWeight:700}}>¥{wages[s.id]?.toLocaleString()}</div>
+              <div style={{textAlign:"center",fontSize:12,color:C.muted}}>{Math.floor(sum.mins/60)}h{sum.mins%60}m</div>
+              <div style={{textAlign:"right",fontSize:13,fontWeight:700,color:C.accent}}>¥{sum.pay.toLocaleString()}</div>
+              <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                <input
+                    type="number"
+                    value={editing[s.id] !== undefined ? editing[s.id] : wages[s.id] ?? ""}
+                    min={900} max={5000}
+                    onChange={e=>setEditing(p=>({...p,[s.id]:e.target.value}))}
+                    onFocus={e=>{ if(editing[s.id]===undefined) setEditing(p=>({...p,[s.id]:String(wages[s.id]??"")})); e.target.select(); }}
+                    style={{width:65,padding:"5px 6px",borderRadius:7,border:`1px solid ${editing[s.id]!==undefined ? C.accent : C.border}`,fontFamily:"inherit",fontSize:12,textAlign:"right",outline:"none"}}
+                  />
+                <button onClick={()=>save(s.id)} style={{padding:"5px 8px",borderRadius:8,border:"none",background:C.ink,color:"#fffaf3",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>更新</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{marginTop:10,fontSize:11,color:C.muted}}>※ 早出は反映なし。残業は15分を上限に計算。</div>
+    </div>
+  );
+}
+
+function WeeklySummary({staff,getShift,attendance,wages}){
+  const [weekOffset,setWeekOffset]=useState(0);
+  const dates=getWeekDates(weekOffset), wk=weekKey(dates);
+  function dayAtt(staffId,date){ return attendance[staffId]?.[dateKey(date)]||{}; }
+  function weekMins(staffId){
+    return dates.reduce((acc,d,i)=>{
+      const sh=getShift(wk,i,staffId), att=dayAtt(staffId,d);
+      return acc+(sh&&att.in&&att.out?calcBillableMinutes(sh.start,sh.end,att.in,att.out):0);
+    },0);
+  }
+  return (
+    <div>
+      <WeekNav dates={dates} offset={weekOffset} setOffset={setWeekOffset}/>
+      <div style={{overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",background:C.paper,borderRadius:14,overflow:"hidden",boxShadow:C.shadow,fontSize:12,minWidth:600}}>
+          <thead>
+            <tr style={{background:C.ink,color:"#fffaf3"}}>
+              <th style={{padding:"10px 12px",textAlign:"left"}}>スタッフ</th>
+              {dates.map((d,i)=><th key={i} style={{padding:"10px 5px",textAlign:"center",color:i>=5?C.gold:"#fffaf3",minWidth:62}}>{DAYS_JP[i]}<br/><span style={{fontSize:10,opacity:0.7}}>{fmtDate(d)}</span></th>)}
+              <th style={{padding:"10px 6px",textAlign:"center",color:C.gold}}>週計</th>
+              <th style={{padding:"10px 6px",textAlign:"center",color:C.gold}}>給与</th>
+            </tr>
+          </thead>
+          <tbody>
+            {staff.map((s,si)=>{
+              const wm=weekMins(s.id), wp=Math.floor(wm/60*(wages[s.id]||0));
+              return (
+                <tr key={s.id} style={{borderBottom:`1px solid ${C.border}`,background:si%2===0?C.paper:C.bg}}>
+                  <td style={{padding:"10px 10px",fontWeight:700}}>
+                    <span style={{display:"inline-flex",alignItems:"center",justifyContent:"center",width:24,height:24,borderRadius:"50%",background:"#e8d5bc",color:C.muted,fontSize:10,fontWeight:700,marginRight:5}}>{s.avatar}</span>
+                    {s.name.split(" ")[0]}
+                  </td>
+                  {dates.map((d,dayIdx)=>{
+                    const sh=getShift(wk,dayIdx,s.id), att=dayAtt(s.id,d);
+                    const mins=sh&&att.in&&att.out?calcBillableMinutes(sh.start,sh.end,att.in,att.out):0;
+                    return (
+                      <td key={dayIdx} style={{padding:"5px 3px",textAlign:"center",verticalAlign:"middle"}}>
+                        {sh?(
+                          <div>
+                            <div style={{fontSize:10,color:C.green,fontWeight:600}}>{sh.start}〜{sh.end}</div>
+                            {(att.in||att.out)&&<div style={{fontSize:10,marginTop:2}}>{att.in&&<span style={{color:"#2563eb"}}>{fmtHM(att.in)}</span>}{att.in&&att.out&&<span style={{color:C.muted}}>〜</span>}{att.out&&<span style={{color:"#7c3aed"}}>{fmtHM(att.out)}</span>}</div>}
+                            {mins>0&&<div style={{fontSize:10,color:C.muted}}>{Math.floor(mins/60)}h{mins%60}m</div>}
+                          </div>
+                        ):<span style={{color:"#e2e8f0",fontSize:16}}>─</span>}
+                      </td>
+                    );
+                  })}
+                  <td style={{padding:"8px 6px",textAlign:"center",fontWeight:700,color:wm>0?C.ink:"#cbd5e1"}}>{wm>0?`${Math.floor(wm/60)}h${wm%60}m`:"──"}</td>
+                  <td style={{padding:"8px 6px",textAlign:"center",fontWeight:700,color:wp>0?C.accent:"#cbd5e1"}}>{wp>0?`¥${wp.toLocaleString()}`:"──"}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function GpsView(){
+  const [lat,setLat]=useState(STORE_LAT), [lng,setLng]=useState(STORE_LNG), [radius,setRadius]=useState(STORE_RADIUS_M);
+  const [res,setRes]=useState(null), [testing,setTesting]=useState(false);
+  function test(){
+    setTesting(true); setRes(null);
+    navigator.geolocation.getCurrentPosition(
+      pos=>{ const d=calcDistanceM(pos.coords.latitude,pos.coords.longitude,lat,lng); setRes({dist:Math.round(d),ok:d<=radius}); setTesting(false); },
+      ()=>{ setRes({error:true}); setTesting(false); },
+      {enableHighAccuracy:true,timeout:10000}
+    );
+  }
+  return (
+    <div>
+      <div style={{background:C.paper,border:`1px solid ${C.border}`,borderRadius:14,padding:20,marginBottom:12}}>
+        <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>📍 現在の設定：京都市東山区日吉町</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
+          <label style={LS}>緯度<input type="number" step="0.0001" value={lat} onChange={e=>setLat(+e.target.value)} style={SS}/></label>
+          <label style={LS}>経度<input type="number" step="0.0001" value={lng} onChange={e=>setLng(+e.target.value)} style={SS}/></label>
+        </div>
+        <label style={LS}>
+          許容半径：{radius}m
+          <input type="range" min={50} max={500} step={10} value={radius} onChange={e=>setRadius(+e.target.value)} style={{width:"100%",accentColor:C.accent,marginTop:6}}/>
+          <span style={{fontSize:11,color:C.muted}}>{radius<=100?"🔒 厳格":radius<=200?"✅ 標準":"⚠️ 広め"}</span>
+        </label>
+      </div>
+      <button onClick={test} disabled={testing} style={PB(testing?"#e2e8f0":C.accent)}>{testing?"📡 確認中...":"📍 現在地をテスト"}</button>
+      {res&&<div style={{marginTop:10,padding:"11px 14px",borderRadius:10,fontSize:13,fontWeight:600,background:res.error?"#f1f5f9":res.ok?"#d1fae5":"#fee2e2",color:res.error?C.muted:res.ok?"#065f46":"#991b1b"}}>
+        {res.error?"⚠️ 位置情報の取得に失敗しました":res.ok?`✅ 打刻可能（店舗から約${res.dist}m）`:`🚫 範囲外（約${res.dist}m、許容: ${radius}m以内）`}
+      </div>}
+      <div style={{marginTop:12,padding:"10px 14px",background:"#fef9ec",border:`1px solid ${C.gold}`,borderRadius:10,fontSize:11,color:C.muted,lineHeight:1.8}}>
+        <strong style={{color:C.ink}}>📌 座標の調べ方</strong><br/>Googleマップで店舗を右クリック →「この場所について」に表示される数字をコピーしてください。
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════
+//  共通UI
+// ═══════════════════════════════════════════════════
+function SectionTitle({icon,title,sub}){
+  return <div style={{marginBottom:18}}><div style={{fontSize:17,fontWeight:700,letterSpacing:"0.06em"}}>{icon} {title}</div>{sub&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>{sub}</div>}<div style={{height:2,background:`linear-gradient(to right,${C.gold},transparent)`,marginTop:7,borderRadius:2}}/></div>;
+}
+function WeekNav({dates,offset,setOffset}){
+  return <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,background:C.paper,border:`1px solid ${C.border}`,borderRadius:12,padding:"9px 14px"}}><button onClick={()=>setOffset(o=>o-1)} style={NB}>‹ 前週</button><div style={{fontSize:13,fontWeight:700}}>{fmtDate(dates[0])} 〜 {fmtDate(dates[6])}{offset===0&&<span style={{fontSize:11,color:C.gold,marginLeft:8}}>今週</span>}</div><button onClick={()=>setOffset(o=>o+1)} style={NB}>次週 ›</button></div>;
+}
+function WeekNavMonth({year,month,offset,setOffset}){
+  return <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,background:C.paper,border:`1px solid ${C.border}`,borderRadius:12,padding:"9px 14px"}}><button onClick={()=>setOffset(o=>o-1)} style={NB}>‹ 前月</button><div style={{fontSize:13,fontWeight:700}}>{year}年{month+1}月{offset===0&&<span style={{fontSize:11,color:C.gold,marginLeft:8}}>今月</span>}</div><button onClick={()=>setOffset(o=>o+1)} style={NB}>次月 ›</button></div>;
+}
+function Modal({children,onClose}){
+  return <div style={{position:"fixed",inset:0,background:"rgba(45,26,14,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:900,padding:16}} onClick={e=>e.target===e.currentTarget&&onClose()}><div style={{background:C.paper,borderRadius:18,padding:24,maxWidth:360,width:"100%",boxShadow:"0 8px 40px rgba(0,0,0,0.25)"}}>{children}<button onClick={onClose} style={{width:"100%",padding:"10px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,fontFamily:"inherit",fontSize:13,color:C.muted,cursor:"pointer",marginTop:8}}>キャンセル</button></div></div>;
+}
+const NB={padding:"6px 14px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,cursor:"pointer",fontFamily:"inherit",fontSize:12,color:C.muted};
+const LS={display:"flex",flexDirection:"column",gap:5,fontSize:12,color:C.muted,flex:1};
+const SS={padding:"8px 10px",borderRadius:8,border:`1px solid ${C.border}`,fontFamily:"inherit",fontSize:13,background:C.bg,color:C.ink};
+const PB=bg=>({width:"100%",padding:"12px",background:bg,color:bg===C.ink||bg===C.accent||bg===C.green?"#fffaf3":C.ink,border:"none",borderRadius:10,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",display:"block"});
+const PunchSt=(active,color)=>({flex:1,padding:"13px 0",borderRadius:12,border:"none",background:active?color:"#e2e8f0",color:active?"#fff":"#94a3b8",fontSize:13,fontWeight:700,cursor:active?"pointer":"not-allowed",fontFamily:"inherit",boxShadow:active?"0 3px 10px rgba(0,0,0,0.12)":"none",transition:"all 0.15s"});
+
+// ═══════════════════════════════════════════════════
+//  管理者ログインモーダル
+// ═══════════════════════════════════════════════════
+function AdminLoginModal({onSuccess,onClose}){
+  const [pw,setPw]=useState("");
+  const [error,setError]=useState(false);
+  const [showPw,setShowPw]=useState(false);
+  const [attempts,setAttempts]=useState(0);
+  const locked=attempts>=5;
+
+  function handleLogin(){
+    if(locked) return;
+    if(pw===ADMIN_PASSWORD){ onSuccess(); }
+    else{
+      setAttempts(a=>a+1);
+      setError(true);
+      setPw("");
+      setTimeout(()=>setError(false),1500);
+    }
+  }
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(45,26,14,0.65)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16}}>
+      <div style={{background:C.paper,borderRadius:20,padding:28,maxWidth:340,width:"100%",boxShadow:"0 12px 48px rgba(0,0,0,0.35)"}}>
+        {/* アイコン */}
+        <div style={{textAlign:"center",marginBottom:20}}>
+          <div style={{width:60,height:60,borderRadius:"50%",background:C.ink,color:C.gold,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,margin:"0 auto 12px"}}>🔐</div>
+          <div style={{fontSize:17,fontWeight:700}}>管理者ログイン</div>
+          <div style={{fontSize:11,color:C.muted,marginTop:4}}>管理者パスワードを入力してください</div>
+        </div>
+
+        {/* パスワード入力 */}
+        <div style={{position:"relative",marginBottom:16}}>
+          <input
+            type={showPw?"text":"password"}
+            value={pw}
+            onChange={e=>{setPw(e.target.value);setError(false);}}
+            onKeyDown={e=>e.key==="Enter"&&handleLogin()}
+            placeholder="パスワード"
+            disabled={locked}
+            autoFocus
+            style={{
+              width:"100%",padding:"12px 44px 12px 14px",borderRadius:10,
+              border:`2px solid ${error?"#ef4444":C.border}`,
+              fontFamily:"inherit",fontSize:14,background:C.bg,color:C.ink,
+              outline:"none",boxSizing:"border-box",
+              transition:"border-color 0.2s",
+              animation:error?"shake 0.3s ease":"none"
+            }}
+          />
+          <button onClick={()=>setShowPw(v=>!v)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:16,color:C.muted}}>
+            {showPw?"🙈":"👁"}
+          </button>
+        </div>
+
+        {/* エラー・ロック表示 */}
+        {error&&!locked&&(
+          <div style={{fontSize:12,color:"#ef4444",fontWeight:700,textAlign:"center",marginBottom:12}}>
+            ❌ パスワードが違います（残り{5-attempts}回）
+          </div>
+        )}
+        {locked&&(
+          <div style={{fontSize:12,color:"#ef4444",fontWeight:700,textAlign:"center",marginBottom:12,padding:"8px 12px",background:"#fee2e2",borderRadius:8}}>
+            🚫 試行回数が上限に達しました。ページを再読み込みしてください。
+          </div>
+        )}
+
+        {/* ログインボタン */}
+        <button onClick={handleLogin} disabled={!pw||locked} style={{
+          width:"100%",padding:"13px",borderRadius:10,border:"none",
+          background:!pw||locked?"#e2e8f0":C.ink,
+          color:!pw||locked?"#94a3b8":"#fffaf3",
+          fontFamily:"inherit",fontSize:14,fontWeight:700,
+          cursor:!pw||locked?"not-allowed":"pointer",marginBottom:10,
+          transition:"all 0.15s"
+        }}>ログイン</button>
+
+        <button onClick={onClose} style={{width:"100%",padding:"10px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:10,fontFamily:"inherit",fontSize:13,color:C.muted,cursor:"pointer"}}>
+          キャンセル
+        </button>
+
+        <div style={{marginTop:16,padding:"10px 12px",background:"#fef9ec",border:`1px solid ${C.gold}`,borderRadius:8,fontSize:11,color:C.muted,textAlign:"center",lineHeight:1.7}}>
+          <strong style={{color:C.ink}}>初期パスワード：</strong> udon2024<br/>
+          ソースコードの <code style={{background:"#e8d5bc",padding:"1px 5px",borderRadius:4}}>ADMIN_PASSWORD</code> を変更して設定してください。
+        </div>
+      </div>
+      <style>{`@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}`}</style>
+    </div>
+  );
+}
