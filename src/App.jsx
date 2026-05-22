@@ -238,7 +238,9 @@ export default function App(){
   );
 }
 
-// ログインページ
+// ═══════════════════════════════════════════════════
+//  ログインページ
+// ═══════════════════════════════════════════════════
 function LoginPage({onSuccess,staff}){
   const [username,setUsername]=useState("");
   const [password,setPassword]=useState("");
@@ -262,7 +264,7 @@ function LoginPage({onSuccess,staff}){
       <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;600;700&display=swap" rel="stylesheet"/>
       <div style={{marginBottom:28,textAlign:"center"}}>
         <div style={{fontSize:42,marginBottom:8}}>🍜</div>
-        <div style={{fontSize:20,fontWeight:700,color:C.ink,letterSpacing:"0.08em"}}>勤怠管理システム</div>
+        <div style={{fontSize:20,fontWeight:700,color:C.ink}}>勤怠管理システム</div>
         <div style={{fontSize:11,color:C.gold,letterSpacing:"0.14em",marginTop:3}}>UDON RESTAURANT</div>
       </div>
       <div style={{background:C.paper,borderRadius:20,padding:"28px 24px",width:"100%",maxWidth:360,boxShadow:"0 8px 32px rgba(45,26,14,0.12)"}}>
@@ -295,14 +297,16 @@ function LoginPage({onSuccess,staff}){
   );
 }
 
-// ユーザーレイアウト
+// ═══════════════════════════════════════════════════
+//  ユーザーレイアウト
+// ═══════════════════════════════════════════════════
 function UserLayout({tab,setTab,currentUser,now,getAtt,punchIn,punchOut,getShiftByDate,attendance}){
-  const tabStyle=(active)=>({flex:1,padding:"11px 4px 9px",border:"none",cursor:"pointer",background:active?C.paper:"transparent",borderBottom:active?`3px solid ${C.accent}`:"3px solid transparent",color:active?C.accent:C.muted,fontFamily:"inherit",fontSize:11,fontWeight:active?700:400});
+  const ts=(active)=>({flex:1,padding:"11px 4px 9px",border:"none",cursor:"pointer",background:active?C.paper:"transparent",borderBottom:active?`3px solid ${C.accent}`:"3px solid transparent",color:active?C.accent:C.muted,fontFamily:"inherit",fontSize:11,fontWeight:active?700:400});
   return (
     <>
       <nav style={{display:"flex",background:"#f5e9d6",borderBottom:`2px solid ${C.border}`}}>
-        <button onClick={()=>setTab("punch")} style={tabStyle(tab==="punch")}><div style={{fontSize:16}}>⏱</div>打刻</button>
-        <button onClick={()=>setTab("record")} style={tabStyle(tab==="record")}><div style={{fontSize:16}}>📊</div>勤務実績</button>
+        <button onClick={()=>setTab("punch")} style={ts(tab==="punch")}><div style={{fontSize:16}}>⏱</div>打刻</button>
+        <button onClick={()=>setTab("record")} style={ts(tab==="record")}><div style={{fontSize:16}}>📊</div>勤務実績</button>
       </nav>
       <main style={{maxWidth:820,margin:"0 auto",padding:"18px 14px 60px"}}>
         {tab==="punch" && <PunchView staff={[currentUser]} now={now} getAtt={getAtt} punchIn={punchIn} punchOut={punchOut} getShiftByDate={getShiftByDate} singleUser={true}/>}
@@ -312,7 +316,9 @@ function UserLayout({tab,setTab,currentUser,now,getAtt,punchIn,punchOut,getShift
   );
 }
 
-// 管理者レイアウト
+// ═══════════════════════════════════════════════════
+//  管理者レイアウト
+// ═══════════════════════════════════════════════════
 function AdminLayout({tab,setTab,staff,getShiftByDate,saveShift,deleteShift,attendance,getAtt,punchIn,punchOut,editAttendance,clearAttendanceDay,addStaff,deleteStaff,updateStaff,showToast,now}){
   const TABS=[
     {id:"shift",icon:"📅",label:"シフト入力"},
@@ -340,7 +346,9 @@ function AdminLayout({tab,setTab,staff,getShiftByDate,saveShift,deleteShift,atte
   );
 }
 
-// 自分の勤務実績
+// ═══════════════════════════════════════════════════
+//  自分の勤務実績
+// ═══════════════════════════════════════════════════
 function MyRecordView({currentUser,getAtt,getShiftByDate,attendance}){
   const [moOffset,setMoOffset]=useState(0);
   const today=new Date();
@@ -416,7 +424,9 @@ function MyRecordView({currentUser,getAtt,getShiftByDate,attendance}){
   );
 }
 
-// シフト入力
+// ═══════════════════════════════════════════════════
+//  シフト入力
+// ═══════════════════════════════════════════════════
 function ShiftInputView({staff,getShiftByDate,saveShift,deleteShift}){
   const [weekOffset,setWeekOffset]=useState(0);
   const [modal,setModal]=useState(null);
@@ -492,7 +502,13 @@ function ShiftInputView({staff,getShiftByDate,saveShift,deleteShift}){
   );
 }
 
-// 打刻
+// ═══════════════════════════════════════════════════
+//  打刻
+// ═══════════════════════════════════════════════════
+const SL={absent:"未出勤",working:"勤務中",done:"退勤済"};
+const SC={absent:C.muted,working:C.green,done:"#6366f1"};
+const SB={absent:"#f1f5f9",working:"#d1fae5",done:"#e0e7ff"};
+
 function PunchView({staff,now,getAtt,punchIn,punchOut,getShiftByDate,singleUser}){
   const [selected,setSelected]=useState(singleUser?staff[0]:null);
   const [gps,setGps]=useState("idle");
@@ -503,8 +519,7 @@ function PunchView({staff,now,getAtt,punchIn,punchOut,getShiftByDate,singleUser}
   const shift=selected?getShiftByDate(today,selected.id):null;
   const status=!att?.clock_in?"absent":!att?.clock_out?"working":"done";
 
-  async function handlePunch(type){
-    async function handlePunch(type, skipGps=false){
+  async function handlePunch(type, skipGps=false){
     if(skipGps){
       setPunching(true);
       type==="in"?await punchIn(selected.id):await punchOut(selected.id);
@@ -521,16 +536,14 @@ function PunchView({staff,now,getAtt,punchIn,punchOut,getShiftByDate,singleUser}
           setPunching(true);
           type==="in"?await punchIn(selected.id):await punchOut(selected.id);
           setPunching(false);
-        } else { setGps("error"); setGpsMsg(`店舗から約${Math.round(dist)}m離れています（許容: ${STORE_RADIUS_M}m以内）`); }
+        } else {
+          setGps("error"); setGpsMsg(`店舗から約${Math.round(dist)}m離れています（許容: ${STORE_RADIUS_M}m以内）`);
+        }
       },
       ()=>{ setGps("denied"); setGpsMsg("位置情報が拒否されました。"); },
       {enableHighAccuracy:true,timeout:10000}
     );
   }
-
-  const SL={absent:"未出勤",working:"勤務中",done:"退勤済"};
-  const SC={absent:C.muted,working:C.green,done:"#6366f1"};
-  const SB={absent:"#f1f5f9",working:"#d1fae5",done:"#e0e7ff"};
 
   return (
     <div>
@@ -569,10 +582,10 @@ function PunchView({staff,now,getAtt,punchIn,punchOut,getShiftByDate,singleUser}
           </div>
           {gps!=="idle"&&<div style={{marginBottom:14,padding:"9px 14px",borderRadius:10,fontSize:12,fontWeight:600,background:gps==="ok"?"#d1fae5":gps==="checking"?"#fef9ec":"#fee2e2",color:gps==="ok"?"#065f46":gps==="checking"?"#92400e":"#991b1b",display:"flex",alignItems:"center",gap:8}}><span>{gps==="checking"?"📡":gps==="ok"?"📍":"🚫"}</span>{gpsMsg}</div>}
           <div style={{display:"flex",gap:10}}>
-            <button disabled={!!att?.clock_in||gps==="checking"||punching} onClick={()=>handlePunch("in", !singleUser)} style={{flex:1,padding:"13px 0",borderRadius:12,border:"none",background:!att?.clock_in&&gps!=="checking"&&!punching?C.green:"#e2e8f0",color:!att?.clock_in&&gps!=="checking"&&!punching?"#fff":"#94a3b8",fontSize:13,fontWeight:700,cursor:!att?.clock_in&&gps!=="checking"&&!punching?"pointer":"not-allowed",fontFamily:"inherit"}}>🟢 出勤打刻</button>
-            <button disabled={!att?.clock_in||!!att?.clock_out||gps==="checking"||punching} onClick={()=>handlePunch("out", !singleUser)} style={{flex:1,padding:"13px 0",borderRadius:12,border:"none",background:att?.clock_in&&!att?.clock_out&&gps!=="checking"&&!punching?"#6366f1":"#e2e8f0",color:att?.clock_in&&!att?.clock_out&&gps!=="checking"&&!punching?"#fff":"#94a3b8",fontSize:13,fontWeight:700,cursor:att?.clock_in&&!att?.clock_out&&gps!=="checking"&&!punching?"pointer":"not-allowed",fontFamily:"inherit"}}>🔵 退勤打刻</button>
+            <button disabled={!!att?.clock_in||punching} onClick={()=>handlePunch("in",!singleUser)} style={{flex:1,padding:"13px 0",borderRadius:12,border:"none",background:!att?.clock_in&&!punching?C.green:"#e2e8f0",color:!att?.clock_in&&!punching?"#fff":"#94a3b8",fontSize:13,fontWeight:700,cursor:!att?.clock_in&&!punching?"pointer":"not-allowed",fontFamily:"inherit"}}>🟢 出勤打刻</button>
+            <button disabled={!att?.clock_in||!!att?.clock_out||punching} onClick={()=>handlePunch("out",!singleUser)} style={{flex:1,padding:"13px 0",borderRadius:12,border:"none",background:att?.clock_in&&!att?.clock_out&&!punching?"#6366f1":"#e2e8f0",color:att?.clock_in&&!att?.clock_out&&!punching?"#fff":"#94a3b8",fontSize:13,fontWeight:700,cursor:att?.clock_in&&!att?.clock_out&&!punching?"pointer":"not-allowed",fontFamily:"inherit"}}>🔵 退勤打刻</button>
           </div>
-          <div style={{marginTop:8,textAlign:"center",fontSize:11,color:C.muted}}>🔒 東山区日吉町から{STORE_RADIUS_M}m以内の位置情報が必要です</div>
+          <div style={{marginTop:8,textAlign:"center",fontSize:11,color:C.muted}}>🔒 店舗から{STORE_RADIUS_M}m以内の位置情報が必要です</div>
         </div>
       )}
       {!singleUser&&(
@@ -581,9 +594,6 @@ function PunchView({staff,now,getAtt,punchIn,punchOut,getShiftByDate,singleUser}
           <div style={{background:C.paper,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
             {staff.map((s,i)=>{
               const a=getAtt(s.id,today),st=!a?.clock_in?"absent":!a?.clock_out?"working":"done";
-              const SL2={absent:"未出勤",working:"勤務中",done:"退勤済"};
-              const SC2={absent:C.muted,working:C.green,done:"#6366f1"};
-              const SB2={absent:"#f1f5f9",working:"#d1fae5",done:"#e0e7ff"};
               return (
                 <div key={s.id} style={{display:"flex",alignItems:"center",padding:"10px 14px",gap:10,borderBottom:i<staff.length-1?`1px solid ${C.border}`:"none"}}>
                   <div style={{width:30,height:30,borderRadius:"50%",background:"#e8d5bc",color:C.muted,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700}}>{nameToAvatar(s.name)}</div>
@@ -593,7 +603,7 @@ function PunchView({staff,now,getAtt,punchIn,punchOut,getShiftByDate,singleUser}
                     {a?.clock_out&&<div>退勤 {fmtHM(a.clock_out)}</div>}
                     {!a?.clock_in&&<div style={{color:"#cbd5e1"}}>未出勤</div>}
                   </div>
-                  <span style={{fontSize:10,padding:"2px 8px",borderRadius:8,background:SB2[st],color:SC2[st],fontWeight:700,minWidth:44,textAlign:"center"}}>{SL2[st]}</span>
+                  <span style={{fontSize:10,padding:"2px 8px",borderRadius:8,background:SB[st],color:SC[st],fontWeight:700,minWidth:44,textAlign:"center"}}>{SL[st]}</span>
                 </div>
               );
             })}
@@ -604,7 +614,9 @@ function PunchView({staff,now,getAtt,punchIn,punchOut,getShiftByDate,singleUser}
   );
 }
 
-// 照合
+// ═══════════════════════════════════════════════════
+//  照合
+// ═══════════════════════════════════════════════════
 function CompareView({staff,attendance,getShiftByDate,getAtt}){
   const [selStaff,setSelStaff]=useState(staff[0]);
   const [moOffset,setMoOffset]=useState(0);
@@ -684,7 +696,9 @@ function CompareView({staff,attendance,getShiftByDate,getAtt}){
   );
 }
 
-// 勤怠修正
+// ═══════════════════════════════════════════════════
+//  勤怠修正
+// ═══════════════════════════════════════════════════
 function AttendanceEditView({staff,attendance,editAttendance,clearAttendanceDay,showToast,getShiftByDate}){
   const [selStaff,setSelStaff]=useState(staff[0]);
   const [moOffset,setMoOffset]=useState(0);
@@ -768,7 +782,9 @@ function AttendanceEditView({staff,attendance,editAttendance,clearAttendanceDay,
   );
 }
 
-// 時給設定
+// ═══════════════════════════════════════════════════
+//  時給設定
+// ═══════════════════════════════════════════════════
 function WageView({staff,attendance,getShiftByDate,updateStaff,showToast}){
   const [editing,setEditing]=useState({});
   const today=new Date(),base=new Date(today.getFullYear(),today.getMonth(),1);
@@ -821,7 +837,9 @@ function WageView({staff,attendance,getShiftByDate,updateStaff,showToast}){
   );
 }
 
-// アカウント管理
+// ═══════════════════════════════════════════════════
+//  アカウント管理
+// ═══════════════════════════════════════════════════
 function AccountsView({staff,addStaff,deleteStaff,updateStaff,showToast}){
   const [showAdd,setShowAdd]=useState(false);
   const [editId,setEditId]=useState(null);
@@ -905,7 +923,7 @@ function AccountsView({staff,addStaff,deleteStaff,updateStaff,showToast}){
         </div>
         {staff.map((s,i)=>(
           <div key={s.id}>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 110px 80px 90px",gap:8,alignItems:"center",padding:"12px 16px",borderBottom:editId===s.id||i<staff.length-1?`1px solid ${C.border}`:"none",background:i%2===0?C.paper:C.bg}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 110px 80px 90px",gap:8,alignItems:"center",padding:"12px 16px",borderBottom:`1px solid ${C.border}`,background:i%2===0?C.paper:C.bg}}>
               <div style={{display:"flex",alignItems:"center",gap:8}}>
                 <div style={{width:32,height:32,borderRadius:"50%",background:"#e8d5bc",color:C.muted,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,flexShrink:0}}>{nameToAvatar(s.name)}</div>
                 <div style={{fontSize:13,fontWeight:700}}>{s.name}</div>
@@ -918,7 +936,7 @@ function AccountsView({staff,addStaff,deleteStaff,updateStaff,showToast}){
               </div>
             </div>
             {editId===s.id&&(
-              <div style={{padding:"16px 16px",background:"#fef9ec",borderBottom:i<staff.length-1?`1px solid ${C.border}`:"none",borderTop:`1px solid ${C.gold}`}}>
+              <div style={{padding:"16px",background:"#fef9ec",borderBottom:`1px solid ${C.border}`,borderTop:`1px solid ${C.gold}`}}>
                 <div style={{fontSize:12,fontWeight:700,marginBottom:12}}>{s.name} を編集</div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
                   <div>{FField("name","氏名")}</div>
@@ -946,7 +964,9 @@ function AccountsView({staff,addStaff,deleteStaff,updateStaff,showToast}){
   );
 }
 
-// 共通UI
+// ═══════════════════════════════════════════════════
+//  共通UI
+// ═══════════════════════════════════════════════════
 function SectionTitle({icon,title,sub}){
   return <div style={{marginBottom:18}}><div style={{fontSize:17,fontWeight:700}}>{icon} {title}</div>{sub&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>{sub}</div>}<div style={{height:2,background:`linear-gradient(to right,${C.gold},transparent)`,marginTop:7,borderRadius:2}}/></div>;
 }
