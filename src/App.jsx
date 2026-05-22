@@ -504,6 +504,13 @@ function PunchView({staff,now,getAtt,punchIn,punchOut,getShiftByDate,singleUser}
   const status=!att?.clock_in?"absent":!att?.clock_out?"working":"done";
 
   async function handlePunch(type){
+    async function handlePunch(type, skipGps=false){
+    if(skipGps){
+      setPunching(true);
+      type==="in"?await punchIn(selected.id):await punchOut(selected.id);
+      setPunching(false);
+      return;
+    }
     setGps("checking"); setGpsMsg("位置情報を確認中...");
     if(!navigator.geolocation){ setGps("error"); setGpsMsg("GPSに対応していません"); return; }
     navigator.geolocation.getCurrentPosition(
@@ -562,8 +569,8 @@ function PunchView({staff,now,getAtt,punchIn,punchOut,getShiftByDate,singleUser}
           </div>
           {gps!=="idle"&&<div style={{marginBottom:14,padding:"9px 14px",borderRadius:10,fontSize:12,fontWeight:600,background:gps==="ok"?"#d1fae5":gps==="checking"?"#fef9ec":"#fee2e2",color:gps==="ok"?"#065f46":gps==="checking"?"#92400e":"#991b1b",display:"flex",alignItems:"center",gap:8}}><span>{gps==="checking"?"📡":gps==="ok"?"📍":"🚫"}</span>{gpsMsg}</div>}
           <div style={{display:"flex",gap:10}}>
-            <button disabled={!!att?.clock_in||gps==="checking"||punching} onClick={()=>handlePunch("in")} style={{flex:1,padding:"13px 0",borderRadius:12,border:"none",background:!att?.clock_in&&gps!=="checking"&&!punching?C.green:"#e2e8f0",color:!att?.clock_in&&gps!=="checking"&&!punching?"#fff":"#94a3b8",fontSize:13,fontWeight:700,cursor:!att?.clock_in&&gps!=="checking"&&!punching?"pointer":"not-allowed",fontFamily:"inherit"}}>🟢 出勤打刻</button>
-            <button disabled={!att?.clock_in||!!att?.clock_out||gps==="checking"||punching} onClick={()=>handlePunch("out")} style={{flex:1,padding:"13px 0",borderRadius:12,border:"none",background:att?.clock_in&&!att?.clock_out&&gps!=="checking"&&!punching?"#6366f1":"#e2e8f0",color:att?.clock_in&&!att?.clock_out&&gps!=="checking"&&!punching?"#fff":"#94a3b8",fontSize:13,fontWeight:700,cursor:att?.clock_in&&!att?.clock_out&&gps!=="checking"&&!punching?"pointer":"not-allowed",fontFamily:"inherit"}}>🔵 退勤打刻</button>
+            <button disabled={!!att?.clock_in||gps==="checking"||punching} onClick={()=>handlePunch("in", !singleUser)} style={{flex:1,padding:"13px 0",borderRadius:12,border:"none",background:!att?.clock_in&&gps!=="checking"&&!punching?C.green:"#e2e8f0",color:!att?.clock_in&&gps!=="checking"&&!punching?"#fff":"#94a3b8",fontSize:13,fontWeight:700,cursor:!att?.clock_in&&gps!=="checking"&&!punching?"pointer":"not-allowed",fontFamily:"inherit"}}>🟢 出勤打刻</button>
+            <button disabled={!att?.clock_in||!!att?.clock_out||gps==="checking"||punching} onClick={()=>handlePunch("out", !singleUser)} style={{flex:1,padding:"13px 0",borderRadius:12,border:"none",background:att?.clock_in&&!att?.clock_out&&gps!=="checking"&&!punching?"#6366f1":"#e2e8f0",color:att?.clock_in&&!att?.clock_out&&gps!=="checking"&&!punching?"#fff":"#94a3b8",fontSize:13,fontWeight:700,cursor:att?.clock_in&&!att?.clock_out&&gps!=="checking"&&!punching?"pointer":"not-allowed",fontFamily:"inherit"}}>🔵 退勤打刻</button>
           </div>
           <div style={{marginTop:8,textAlign:"center",fontSize:11,color:C.muted}}>🔒 東山区日吉町から{STORE_RADIUS_M}m以内の位置情報が必要です</div>
         </div>
